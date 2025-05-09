@@ -225,7 +225,7 @@ Another line of text here.
 *   **Not a full CommonMark parser:** Complex nested structures or some edge cases in Markdown syntax might not be rendered perfectly.
 *   **Escaped Characters:** Does not currently handle escaped Markdown characters (e.g., `\*` might be interpreted as italic start/end).
 *   **Tables:** Markdown tables are not supported.
-*   **Pygments Formatter Style:** The `Terminal256Formatter` style is currently hardcoded to `native`. This could be made configurable.
+*   **Pygments Formatter Style:** The `Terminal256Formatter` style is currently hardcoded to `dracula`. This could be made configurable.
 *   **Performance:** For extremely large files, line-by-line regex processing might be slower than a dedicated parser.
 
 ## License
