@@ -63,9 +63,9 @@ cat README.MD | ./mdc.py | less -R
 2.  **Ensure Pygments is installed:**
     If you haven't already, install Pygments:
     ```bash
-    pip install Pygments
+    pip install pygments
     # or for a specific Python 3 installation:
-    # python3 -m pip install Pygments
+    # python3 -m pip install pygments
     ```
 
 3.  **Make the script executable:**
@@ -106,6 +106,11 @@ curl -s https://raw.githubusercontent.com/owner/repo/main/README.md | mdc
 cat README.md | ./mdc.py
 ```
 
+
+**Or run directly on a file which uses `less` as a pager by default:**
+```bash
+mdc README.md
+```
 ## More Code Block Examples
 
 **JavaScript:**
@@ -225,4 +230,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 _Happy coloring!_
-```
