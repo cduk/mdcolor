@@ -161,7 +161,7 @@ def main():
         if sys.argv[1] == '--help' or sys.argv[1] == '-h':
             print(f"Usage: {sys.argv[0]} [markdown_file]")
             print("Processes Markdown from file or stdin and outputs colorized text.")
-            print("If a file is given and output is to a TTY, 'less -R' is used for paging.")
+            print("If a file is given and output is to a TTY, 'less -R -F' is used for paging.")
             print("Example: cat README.md | mdcolor")
             print("         mdcolor README.md")
             sys.exit(0)
@@ -195,13 +195,13 @@ def main():
     # Pygments availability notice (only if not reading from TTY, for piped input)
     if not sys.stdin.isatty() and filename_arg is None: # i.e. piped input
         if not PYGMENTS_AVAILABLE:
-            print("Notice: Pygments library not found. Syntax highlighting for specific code block languages is disabled. Install with 'pip install Pygments'. Code blocks will use basic coloring.", file=sys.stderr)
+            print("Notice: Pygments library not found. Syntax highlighting for specific code block languages is disabled. Install with 'pip install pygments'. Code blocks will use basic coloring.", file=sys.stderr)
 
     if should_page:
         less_process = None
         try:
             # Start less process
-            less_process = subprocess.Popen(["less", "-R"], stdin=subprocess.PIPE, text=True, encoding='utf-8')
+            less_process = subprocess.Popen(["less", "-R", "-F"], stdin=subprocess.PIPE, text=True, encoding='utf-8')
             
             def paged_output_func(s):
                 try:
