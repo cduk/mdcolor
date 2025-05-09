@@ -1,5 +1,7 @@
 # MDColor (mdc) - Terminal Markdown Colorizer
 
+![Example with markdown left and output on right](example.png)
+
 ## Description
 MDColor is a Python script designed for Linux terminals that takes Markdown text via piped input and outputs a colorized and styled version directly to your terminal. It enhances readability by applying ANSI escape codes for bold, italic, headers, code blocks (with syntax highlighting via Pygments for supported languages), lists, links, and more.
 
