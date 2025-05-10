@@ -10,7 +10,7 @@ MDColor is a Python script designed for Linux terminals that takes Markdown text
 ```bash
 cat README.md | ./mdc.py
 # or, using less as a pager:
-cat README.MD | ./mdc.py | less -R
+cat README.MD | ./mdc.py | less -R -F
 # this is the same as:
 ./mdc.py README.MD
 # Or, if installed to PATH:
