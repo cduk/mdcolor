@@ -230,6 +230,3 @@ Another line of text here.
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-_Happy coloring!_
