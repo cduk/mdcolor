@@ -243,7 +243,7 @@ def process_stream(input_stream, output_func):
                     for hl_line in highlighted_lines_iter:
                         output_func(format_code_block_content_line_partial(hl_line, terminal_columns, 0))
                 
-                output_func(format_code_block_bottom_bar_partial(terminal_columns))
+                #output_func(format_code_block_bottom_bar_partial(terminal_columns))
                 code_block_lines_buffer = []
             else: # Opening a new block
                 in_code_block = True
