@@ -33,6 +33,9 @@ STYLE = {
     "link_text": F_B_BLUE, "link_url": DIM + F_BLUE, "hr": DIM + F_WHITE,
     "fence_bar": NORMAL_INTENSITY + DIM + F_WHITE,
     "fence_lang_tag": BOLD + F_B_YELLOW,
+    "table_border": DIM + F_WHITE,
+    "table_header": BOLD + F_B_BLUE,
+    "table_cell": "",
 }
 
 try:
@@ -185,16 +188,243 @@ def format_fence_line(language_name, terminal_columns, is_opening=True):
     else: # Closing fence or no language
         return f"{bar_style}{H_LINE * effective_cols}{RESET}"
 
-def process_stream(input_stream, output_func):
+ANSI_RE = re.compile(r'\033\[[0-9;]*m')
+
+def visual_len(s):
+    """Length of string excluding ANSI escape sequences."""
+    return len(ANSI_RE.sub('', s))
+
+def parse_table_row(line):
+    """Parse a markdown table row into a list of cell texts. Returns None if not a table row."""
+    stripped = line.strip()
+    if not stripped.startswith('|') or not stripped.endswith('|'):
+        return None
+    # Split on |, discard empty first/last from leading/trailing |
+    cells = stripped.split('|')
+    cells = [c.strip() for c in cells[1:-1]]
+    return cells
+
+def is_separator_row(line):
+    """Check if a line is a markdown table separator like |---|:---:|---|."""
+    stripped = line.strip()
+    if not stripped.startswith('|') or not stripped.endswith('|'):
+        return False
+    cells = stripped.split('|')
+    cells = [c.strip() for c in cells[1:-1]]
+    return all(re.fullmatch(r':?-{1,}:?', c) for c in cells) and len(cells) > 0
+
+def parse_alignment(separator_line):
+    """Parse column alignments from a separator row like |:---|:---:|---:|."""
+    stripped = separator_line.strip()
+    cells = stripped.split('|')
+    cells = [c.strip() for c in cells[1:-1]]
+    aligns = []
+    for c in cells:
+        if c.startswith(':') and c.endswith(':'):
+            aligns.append('center')
+        elif c.endswith(':'):
+            aligns.append('right')
+        else:
+            aligns.append('left')
+    return aligns
+
+def pad_cell(text, width, align):
+    """Pad cell text to given visual width with specified alignment."""
+    vlen = visual_len(text)
+    pad = max(0, width - vlen)
+    if align == 'center':
+        left = pad // 2
+        right = pad - left
+        return ' ' * left + text + ' ' * right
+    elif align == 'right':
+        return ' ' * pad + text
+    else:
+        return text + ' ' * pad
+
+def wrap_ansi_text(text, width):
+    """Wraps text into a list of strings of max `width`, preserving ANSI codes."""
+    if width < 1: return [""]
+    lines = []; curr_line = ""; curr_len = 0; active_ansi = []
+
+    # Split text separating ANSI codes and whitespace, keeping all tokens
+    tokens = re.split(r'(\033\[[0-9;]*m|\s+)', text)
+
+    for token in tokens:
+        if not token: continue
+
+        # Track and apply ANSI sequences
+        if token.startswith('\033['):
+            if token == '\033[0m': active_ansi.clear()
+            elif token not in active_ansi: active_ansi.append(token)
+            curr_line += token
+            continue
+
+        # Handle whitespace safely
+        if token.isspace():
+            if curr_len + len(token) <= width and curr_len > 0:
+                curr_line += token
+                curr_len += len(token)
+            continue
+
+        vlen = visual_len(token)
+
+        # Hard-wrap: If a single word is longer than the column width
+        if vlen > width:
+            if curr_len > 0: # Flush current line first
+                lines.append(curr_line + "\033[0m")
+                curr_line = "".join(active_ansi); curr_len = 0
+
+            while len(token) > width:
+                lines.append(curr_line + token[:width] + "\033[0m")
+                token = token[width:]
+                curr_line = "".join(active_ansi)
+
+            curr_line += token
+            curr_len = len(token)
+
+        # Standard wrap: If adding this word exceeds width
+        elif curr_len + vlen > width and curr_len > 0:
+            lines.append(curr_line + "\033[0m")
+            curr_line = "".join(active_ansi) + token
+            curr_len = vlen
+        else: # Fits perfectly
+            curr_line += token
+            curr_len += vlen
+
+    if curr_line: lines.append(curr_line + "\033[0m")
+    return lines if lines else [""]
+
+def calculate_column_widths(styled_cells, num_cols, terminal_columns):
+    """Calculates optimal column widths minimizing height without exceeding screen width."""
+    term_width = terminal_columns if terminal_columns else 80
+    max_widths = [0] * num_cols
+    min_widths = [0] * num_cols
+
+    for row in styled_cells:
+        for j, cell in enumerate(row):
+            max_widths[j] = max(max_widths[j], visual_len(cell))
+            # Min width is the longest single word
+            clean_text = ANSI_RE.sub('', cell)
+            max_word = max((len(w) for w in clean_text.split()), default=0)
+            min_widths[j] = max(min_widths[j], max_word)
+
+    # Calculate overhead: borders (|) and padding spaces (2 per cell)
+    overhead = (3 * num_cols) + 1 + (2 * num_cols)
+    avail_width = max(10, term_width - overhead)
+
+    # If natural content fits, return it as-is
+    if sum(max_widths) <= avail_width:
+        return max_widths
+
+    # Content doesn't fit — distribute available space between min and max
+    col_widths = list(min_widths)
+    extra = avail_width - sum(col_widths)
+
+    if extra < 0: # Extreme case: terminal is too small even for single words
+        total_min = sum(min_widths) or 1
+        return [max(1, int((w / total_min) * avail_width)) for w in min_widths]
+
+    # Distribute remaining space based on "flex" (how much more space a column wants)
+    flex = [max_widths[i] - min_widths[i] for i in range(num_cols)]
+    total_flex = sum(flex)
+
+    if total_flex > 0:
+        for i in range(num_cols):
+            col_widths[i] += int((flex[i] / total_flex) * extra)
+
+        # Distribute any rounding remainder to the columns that wanted the most space
+        remainder = avail_width - sum(col_widths)
+        if remainder > 0:
+            sorted_idx = sorted(range(num_cols), key=lambda x: flex[x], reverse=True)
+            for i in range(remainder):
+                col_widths[sorted_idx[i % num_cols]] += 1
+
+    return col_widths
+
+def render_table(rows, separator_idx, output_func, terminal_columns=None, wrap_tables=True):
+    """Render a buffered markdown table with optimal column wrapping."""
+    border_style = STYLE.get("table_border", RESET)
+    header_style = STYLE.get("table_header", RESET)
+    cell_style = STYLE.get("table_cell", RESET)
+
+    data_rows = [r for i, r in enumerate(rows) if i != separator_idx]
+    parsed = [parse_table_row(r) for r in data_rows]
+    num_cols = max(len(r) for r in parsed) if parsed else 0
+
+    if num_cols == 0:
+        for r in rows: output_func(apply_styles(r))
+        return
+
+    # Normalize rows
+    for i in range(len(parsed)):
+        while len(parsed[i]) < num_cols: parsed[i].append('')
+
+    aligns = parse_alignment(rows[separator_idx]) if 0 <= separator_idx < len(rows) else ['left'] * num_cols
+    while len(aligns) < num_cols: aligns.append('left')
+
+    has_header = separator_idx == 1 and len(data_rows) > 0
+
+    # Apply styles to all cells first
+    styled_cells = []
+    for row in parsed:
+        styled_cells.append([apply_styles(cell) for cell in row])
+
+    # Calculate column widths
+    if wrap_tables:
+        col_widths = calculate_column_widths(styled_cells, num_cols, terminal_columns)
+    else:
+        col_widths = [0] * num_cols
+        for row in styled_cells:
+            for j, cell in enumerate(row):
+                col_widths[j] = max(col_widths[j], visual_len(cell))
+
+    # Build separator line
+    sep_parts = []
+    for j in range(num_cols):
+        w = max(3, col_widths[j] + 2)
+        a = aligns[j]
+        if a == 'center': sep_parts.append(':' + '-' * max(1, w - 2) + ':')
+        elif a == 'right': sep_parts.append('-' * max(1, w - 1) + ':')
+        else: sep_parts.append('-' * w)
+    sep_line = DIM + '|' + ('|'.join(sep_parts)) + '|' + RESET
+
+    # Render rows
+    for i, styled_row in enumerate(styled_cells):
+        is_header_row = has_header and i == 0
+        row_style = header_style if is_header_row else cell_style
+        pipe_style = row_style if is_header_row else DIM
+
+        if wrap_tables:
+            # Wrap text in each cell of this row
+            wrapped_cols = [wrap_ansi_text(cell, col_widths[j]) for j, cell in enumerate(styled_row)]
+            max_lines = max((len(c) for c in wrapped_cols), default=1)
+
+            for line_idx in range(max_lines):
+                line = pipe_style + '|'
+                for j in range(num_cols):
+                    cell_text = wrapped_cols[j][line_idx] if line_idx < len(wrapped_cols[j]) else ""
+                    padded = pad_cell(cell_text, col_widths[j], aligns[j])
+                    line += row_style + ' ' + padded + ' ' + pipe_style + '|'
+                line += RESET
+                output_func(line)
+        else:
+            padded = [pad_cell(cell, col_widths[j], aligns[j]) for j, cell in enumerate(styled_row)]
+            line = pipe_style + '|'
+            line += (pipe_style + '|').join(
+                (row_style + ' ' + padded[j] + ' ') for j in range(num_cols)
+            )
+            line += pipe_style + '|' + RESET
+            output_func(line)
+
+        if is_header_row:
+            output_func(sep_line)
+
+def process_stream(input_stream, output_func, wrap_tables=True, terminal_columns=None):
     in_code_block = False
     code_block_lines_buffer = []
-
-    terminal_columns = None
-    if sys.stdout.isatty():
-        try:
-            terminal_columns = os.get_terminal_size().columns
-        except OSError:
-            terminal_columns = None
+    in_table = False
+    table_row_buffer = []
+    table_has_header = False
 
     for line_raw in input_stream:
         line = line_raw.rstrip('\n')
@@ -257,6 +487,39 @@ def process_stream(input_stream, output_func):
         if in_code_block:
             code_block_lines_buffer.append(line)
             continue
+
+        # --- Table detection ---
+        is_tbl_sep = is_separator_row(stripped_line)
+        is_tbl_row = parse_table_row(stripped_line) is not None
+
+        if is_tbl_sep or is_tbl_row:
+            if not in_table:
+                # Starting a new table
+                in_table = True
+                table_row_buffer = [line]
+                table_has_header = is_tbl_row  # first row is header if it's data
+            else:
+                table_row_buffer.append(line)
+            continue
+        else:
+            # Not a table line — flush any buffered table first
+            if in_table:
+                # Find separator row index
+                sep_idx = -1
+                for ti, tr in enumerate(table_row_buffer):
+                    if is_separator_row(tr):
+                        sep_idx = ti
+                        break
+                if sep_idx >= 0:
+                    render_table(table_row_buffer, sep_idx, output_func, terminal_columns, wrap_tables)
+                else:
+                    # No separator found — not a valid table, render raw
+                    for tr in table_row_buffer:
+                        output_func(apply_styles(tr))
+                in_table = False
+                table_row_buffer = []
+
+        # --- Standard Markdown processing ---
 
         # --- Standard Markdown processing ---
         processed_line = line # Use the original `line` for non-code-block processing
@@ -333,19 +596,50 @@ def process_stream(input_stream, output_func):
 
         output_func(format_code_block_bottom_bar_partial(terminal_columns))
 
+    # Handle any pending table at end of stream
+    if in_table and table_row_buffer:
+        sep_idx = -1
+        for ti, tr in enumerate(table_row_buffer):
+            if is_separator_row(tr):
+                sep_idx = ti
+                break
+        if sep_idx >= 0:
+            render_table(table_row_buffer, sep_idx, output_func, terminal_columns)
+        else:
+            for tr in table_row_buffer:
+                output_func(apply_styles(tr))
+
 def main():
+    wrap_tables = True
     filename_arg = None
-    if len(sys.argv) > 1:
-        if sys.argv[1] == '--help' or sys.argv[1] == '-h':
-            print(f"Usage: {sys.argv[0]} [markdown_file]")
+
+    args = sys.argv[1:]
+    filtered_args = []
+    for arg in args:
+        if arg == '--no-wrap' or arg == '-w':
+            wrap_tables = False
+        elif arg == '--help' or arg == '-h':
+            print(f"Usage: {sys.argv[0]} [--no-wrap|-w] [markdown_file]")
             print("Processes Markdown from file or stdin and outputs colorized text.")
             print("If a file is given and output is to a TTY, 'less -R' is used for paging.")
+            print("  --no-wrap, -w  Disable table column wrapping")
             sys.exit(0)
-        filename_arg = sys.argv[1]
-        if filename_arg == '-': 
+        else:
+            filtered_args.append(arg)
+
+    if filtered_args:
+        filename_arg = filtered_args[0]
+        if filename_arg == '-':
             filename_arg = None
 
     input_source = None; close_source_after = False; should_page = False
+
+    # Detect terminal width before stdout might be redirected to a pager
+    terminal_columns = None
+    try:
+        terminal_columns = os.get_terminal_size().columns
+    except OSError:
+        terminal_columns = None
 
     if filename_arg:
         if not os.path.exists(filename_arg):
@@ -382,7 +676,7 @@ def main():
                     # It's hard to know if less exited normally or due to an error on its side.
                     # We can't easily get its return code here if stdin write fails.
                     sys.exit(1) # Generic error
-            process_stream(input_source, paged_output_func)
+            process_stream(input_source, paged_output_func, wrap_tables, terminal_columns)
         except KeyboardInterrupt: # Ctrl+C during mdcolor processing before less takes over fully
             print(f"{RESET}\nExiting.", file=sys.stderr)
             if less_process and less_process.stdin and not less_process.stdin.closed:
@@ -406,7 +700,7 @@ def main():
                      sys.exit(return_code)
     else: 
         def direct_output_func(s): print(s)
-        process_stream(input_source, direct_output_func)
+        process_stream(input_source, direct_output_func, wrap_tables, terminal_columns)
 
     if close_source_after and input_source: input_source.close()
 
